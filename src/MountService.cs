@@ -11,19 +11,20 @@ namespace Ext4Mounter;
 /// </summary>
 public sealed class MountService : IDisposable
 {
-    private readonly Lock _lock = new();
+    private readonly SemaphoreSlim _lock = new(1, 1);
 
     private readonly List<MountedPartition> _mounted = [];
 
     public void Dispose()
     {
-        UnmountAll();
+        UnmountAllAsync().GetAwaiter().GetResult();
+        _lock.Dispose();
     }
 
     /// <summary>
     /// 扫描并挂载所有 USB 磁盘上的 ext4 分区
     /// </summary>
-    public void MountAllUsbExt4()
+    public async Task MountAllUsbExt4Async()
     {
         var usbDisks = DiskManager.GetUsbDiskNumbers();
         if (usbDisks.Count == 0)
@@ -38,7 +39,7 @@ public sealed class MountService : IDisposable
                 var partitions = DiskManager.ScanDisk(diskNumber);
                 foreach (var part in partitions)
                 {
-                    MountPartition(part);
+                    await MountPartitionAsync(part);
                 }
             }
             catch (Exception ex)
@@ -51,9 +52,10 @@ public sealed class MountService : IDisposable
     /// <summary>
     /// 卸载所有不再存在的 USB 磁盘上的分区
     /// </summary>
-    public void UnmountStalePartitions()
+    public async Task UnmountStalePartitionsAsync()
     {
-        lock (_lock)
+        await _lock.WaitAsync();
+        try
         {
             var currentUsbDisks = DiskManager.GetUsbDiskNumbers();
             var toRemove = _mounted.Where(m => !currentUsbDisks.Contains(m.DiskNumber)).ToList();
@@ -62,9 +64,9 @@ public sealed class MountService : IDisposable
                 try
                 {
                     Log.Information("[MountService] 卸载 {DriveLetter}:", mount.DriveLetter);
-                    DriveMapper.UnmapLocalDrive(mount.DriveLetter);
+                    await DriveMapper.UnmapLocalDriveAsync(mount.DriveLetter);
                     mount.Provider.Dispose();
-                    CleanupVirtualizationRoot(mount.Provider.VirtualizationRoot);
+                    await CleanupVirtualizationRootAsync(mount.Provider.VirtualizationRoot);
                     mount.FileSystem.Dispose();
                     _mounted.Remove(mount);
                     Log.Information("[MountService] {DriveLetter}: 已卸载", mount.DriveLetter);
@@ -76,23 +78,28 @@ public sealed class MountService : IDisposable
                 }
             }
         }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     /// <summary>
     /// 卸载所有已挂载的分区
     /// </summary>
-    public void UnmountAll()
+    public async Task UnmountAllAsync()
     {
-        lock (_lock)
+        await _lock.WaitAsync();
+        try
         {
             foreach (var mount in _mounted.ToList())
             {
                 try
                 {
                     Log.Information("[MountService] 卸载 {DriveLetter}:", mount.DriveLetter);
-                    DriveMapper.UnmapLocalDrive(mount.DriveLetter);
+                    await DriveMapper.UnmapLocalDriveAsync(mount.DriveLetter);
                     mount.Provider.Dispose();
-                    CleanupVirtualizationRoot(mount.Provider.VirtualizationRoot);
+                    await CleanupVirtualizationRootAsync(mount.Provider.VirtualizationRoot);
                     mount.FileSystem.Dispose();
                 }
                 catch (Exception ex)
@@ -102,11 +109,16 @@ public sealed class MountService : IDisposable
             }
             _mounted.Clear();
         }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    private void MountPartition(DiskManager.Ext4PartitionInfo partInfo)
+    private async Task MountPartitionAsync(DiskManager.Ext4PartitionInfo partInfo)
     {
-        lock (_lock)
+        await _lock.WaitAsync();
+        try
         {
             // 检查是否已挂载
             if (_mounted.Any(m => m.DiskNumber == partInfo.DiskNumber &&
@@ -124,15 +136,15 @@ public sealed class MountService : IDisposable
             {
                 // 创建虚拟化根目录（临时文件夹）
                 var virtRoot = Path.Combine(Path.GetTempPath(), $"ext4mount_{partInfo.DiskNumber}_{partInfo.PartitionOffset}");
-                CleanupVirtualizationRoot(virtRoot);
+                await CleanupVirtualizationRootAsync(virtRoot);
                 Directory.CreateDirectory(virtRoot);
                 var provider = new ProjFSProvider(ext4, virtRoot);
                 provider.Start();
-                var driveLetter = DriveMapper.MapLocalFolder(virtRoot);
+                var driveLetter = await DriveMapper.MapLocalFolderAsync(virtRoot);
                 if (driveLetter == null)
                 {
                     provider.Dispose();
-                    CleanupVirtualizationRoot(virtRoot);
+                    await CleanupVirtualizationRootAsync(virtRoot);
                     ext4.Dispose();
                     Log.Warning("[MountService] 映射盘符失败: {Description}", partInfo.Description);
                     return;
@@ -165,9 +177,13 @@ public sealed class MountService : IDisposable
                 ext4.Dispose();
             }
         }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
-    private static void CleanupVirtualizationRoot(string path)
+    private static async Task CleanupVirtualizationRootAsync(string path)
     {
         if (!Directory.Exists(path))
         {
@@ -187,10 +203,13 @@ public sealed class MountService : IDisposable
                 RedirectStandardError = true
             };
             using var proc = Process.Start(psi);
-            proc?.WaitForExit(5000);
+            if (proc != null)
+            {
+                await proc.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
 
             // 等待文件系统释放
-            Thread.Sleep(200);
+            await Task.Delay(200);
         }
         catch
         {
@@ -210,7 +229,7 @@ public sealed class MountService : IDisposable
         {
             // 最后尝试一次，忽略失败
         }
-        Thread.Sleep(200);
+        await Task.Delay(200);
     }
 
     private static string FormatSize(long bytes)

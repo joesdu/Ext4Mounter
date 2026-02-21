@@ -19,9 +19,9 @@ public sealed class UsbWatcher : IDisposable
         _removeWatcher?.Dispose();
     }
 
-    public event Action? DeviceInserted;
+    public event Func<Task>? DeviceInserted;
 
-    public event Action? DeviceRemoved;
+    public event Func<Task>? DeviceRemoved;
 
     public void Start()
     {
@@ -30,12 +30,15 @@ public sealed class UsbWatcher : IDisposable
             TimeSpan.FromSeconds(2),
             "TargetInstance ISA 'Win32_DiskDrive' AND TargetInstance.InterfaceType='USB'");
         _insertWatcher = new(insertQuery);
-        _insertWatcher.EventArrived += (_, _) =>
+        _insertWatcher.EventArrived += async (_, _) =>
         {
             Log.Information("[UsbWatcher] 检测到 USB 磁盘插入");
             // 延迟一下等系统识别完成
-            Thread.Sleep(2000);
-            DeviceInserted?.Invoke();
+            await Task.Delay(2000);
+            if (DeviceInserted != null)
+            {
+                await DeviceInserted.Invoke();
+            }
         };
         _insertWatcher.Start();
 
@@ -44,10 +47,13 @@ public sealed class UsbWatcher : IDisposable
             TimeSpan.FromSeconds(2),
             "TargetInstance ISA 'Win32_DiskDrive' AND TargetInstance.InterfaceType='USB'");
         _removeWatcher = new(removeQuery);
-        _removeWatcher.EventArrived += (_, _) =>
+        _removeWatcher.EventArrived += async (_, _) =>
         {
             Log.Information("[UsbWatcher] 检测到 USB 磁盘拔出");
-            DeviceRemoved?.Invoke();
+            if (DeviceRemoved != null)
+            {
+                await DeviceRemoved.Invoke();
+            }
         };
         _removeWatcher.Start();
         Log.Information("[UsbWatcher] USB 监听已启动");

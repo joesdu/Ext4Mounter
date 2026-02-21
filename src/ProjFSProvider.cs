@@ -216,12 +216,12 @@ public sealed class ProjFSProvider : IDisposable
     private const int E_FILENOTFOUND = unchecked((int)0x80070002);
     private const int E_OUTOFMEMORY = unchecked((int)0x8007000E);
     private const int ChunkSize = 4 * 1024 * 1024; // 4MB — 减少 ProjFS 回调次数
-    private const int MaxCachedStreams = 16;
+    private const int MaxCachedStreams = 64;
     private readonly PrjEndDirectoryEnumerationCb _endDirectoryEnumerationCb;
     private readonly Dictionary<Guid, EnumState> _enumerations = new();
 
     private readonly ExtFileSystem _ext4;
-    private readonly Lock _fsLock = new();
+    private readonly ReaderWriterLockSlim _fsLock = new();
     private readonly PrjGetDirectoryEnumerationCb _getDirectoryEnumerationCb;
     private readonly PrjGetFileDataCb _getFileDataCb;
     private readonly PrjGetPlaceholderInfoCb _getPlaceholderInfoCb;
@@ -342,9 +342,14 @@ public sealed class ProjFSProvider : IDisposable
         ProjFSNative.PrjStopVirtualizing(_namespaceContext);
         _namespaceContext = IntPtr.Zero;
         _started = false;
-        lock (_fsLock)
+        _fsLock.EnterWriteLock();
+        try
         {
             ClearStreamCache();
+        }
+        finally
+        {
+            _fsLock.ExitWriteLock();
         }
         lock (_enumerations)
         {
@@ -401,10 +406,12 @@ public sealed class ProjFSProvider : IDisposable
         {
             var unixPath = NormalizeToUnixPath(callbackData.FilePathName);
             var builtEntries = new List<(string Name, bool IsDirectory, long Size, DateTime LastWrite)>();
-            lock (_fsLock)
+            _fsLock.EnterReadLock();
+            try
             {
                 if (_ext4.DirectoryExists(unixPath))
                 {
+                    // ReSharper disable once LoopCanBeConvertedToQuery
                     foreach (var dirPath in _ext4.GetDirectories(unixPath))
                     {
                         var name = Path.GetFileName(dirPath.TrimEnd('/'));
@@ -415,6 +422,7 @@ public sealed class ProjFSProvider : IDisposable
                         var info = _ext4.GetDirectoryInfo(dirPath);
                         builtEntries.Add((name, true, 0, info.LastWriteTimeUtc));
                     }
+                    // ReSharper disable once LoopCanBeConvertedToQuery
                     foreach (var filePath in _ext4.GetFiles(unixPath))
                     {
                         var name = Path.GetFileName(filePath);
@@ -428,7 +436,12 @@ public sealed class ProjFSProvider : IDisposable
                     }
                 }
             }
+            finally
+            {
+                _fsLock.ExitReadLock();
+            }
             builtEntries.Sort((a, b) => ProjFSNative.PrjFileNameCompare(a.Name, b.Name));
+            // ReSharper disable once ConvertIfStatementToSwitchStatement
             if (!string.IsNullOrEmpty(normalizedSearch) && ProjFSNative.PrjDoesNameContainWildCards(normalizedSearch))
             {
                 builtEntries = builtEntries
@@ -485,7 +498,8 @@ public sealed class ProjFSProvider : IDisposable
         bool isDirectory;
         long size;
         DateTime lastWriteUtc;
-        lock (_fsLock)
+        _fsLock.EnterReadLock();
+        try
         {
             if (_ext4.DirectoryExists(unixPath))
             {
@@ -503,6 +517,10 @@ public sealed class ProjFSProvider : IDisposable
             {
                 return E_FILENOTFOUND;
             }
+        }
+        finally
+        {
+            _fsLock.ExitReadLock();
         }
         var fileTime = lastWriteUtc == DateTime.MinValue
                            ? DateTime.UtcNow.ToFileTimeUtc()
@@ -562,9 +580,10 @@ public sealed class ProjFSProvider : IDisposable
             var chunkLength = (int)Math.Min(ChunkSize, remaining);
             int read;
 
-            // 在锁内读取 ext4 数据到 managedBuffer
+            // 在写锁内读取 ext4 数据到 managedBuffer（需要写锁：可能写入流缓存 + 修改流 Position）
             var lockSw = Stopwatch.StartNew();
-            lock (_fsLock)
+            _fsLock.EnterWriteLock();
+            try
             {
                 lockWaitMs += lockSw.ElapsedMilliseconds;
                 var stream = GetOrOpenCachedStream(unixPath);
@@ -578,6 +597,10 @@ public sealed class ProjFSProvider : IDisposable
                 }
                 stream.Position = (long)writeOffset;
                 read = stream.Read(managedBuffer, 0, chunkLength);
+            }
+            finally
+            {
+                _fsLock.ExitWriteLock();
             }
             if (read <= 0)
             {
@@ -618,7 +641,7 @@ public sealed class ProjFSProvider : IDisposable
     }
 
     /// <summary>
-    /// 获取或打开缓存的文件流。必须在 _fsLock 内调用。
+    /// 获取或打开缓存的文件流。必须在 _fsLock 写锁内调用。
     /// </summary>
     private Stream? GetOrOpenCachedStream(string unixPath)
     {
@@ -661,7 +684,7 @@ public sealed class ProjFSProvider : IDisposable
     }
 
     /// <summary>
-    /// 清理所有缓存的文件流。必须在 _fsLock 内调用。
+    /// 清理所有缓存的文件流。必须在 _fsLock 写锁内调用。
     /// </summary>
     private void ClearStreamCache()
     {

@@ -33,27 +33,27 @@ try
 
     // 启动时先扫描一次
     Log.Information("[启动] 扫描已连接的 USB 磁盘...");
-    mountService.MountAllUsbExt4();
+    await mountService.MountAllUsbExt4Async();
 
     // 监听 USB 插拔
-    usbWatcher.DeviceInserted += () =>
+    usbWatcher.DeviceInserted += async () =>
     {
         try
         {
             // ReSharper disable once AccessToDisposedClosure
-            mountService.MountAllUsbExt4();
+            await mountService.MountAllUsbExt4Async();
         }
         catch (Exception ex)
         {
             Log.Error(ex, "挂载失败");
         }
     };
-    usbWatcher.DeviceRemoved += () =>
+    usbWatcher.DeviceRemoved += async () =>
     {
         try
         {
             // ReSharper disable once AccessToDisposedClosure
-            mountService.UnmountStalePartitions();
+            await mountService.UnmountStalePartitionsAsync();
         }
         catch (Exception ex)
         {
@@ -70,7 +70,7 @@ try
         {
             case 'Q':
                 Log.Information("[退出] 正在卸载所有分区...");
-                mountService.UnmountAll();
+                await mountService.UnmountAllAsync();
                 return;
             case 'S':
                 Log.Information("[扫描] 重新扫描所有磁盘...");
@@ -86,7 +86,7 @@ try
                         Log.Information("  {Description}", p.Description);
                     }
                 }
-                mountService.MountAllUsbExt4();
+                await mountService.MountAllUsbExt4Async();
                 break;
             case 'L':
                 Log.Information("[列表] 当前挂载的 ext4 驱动器可在资源管理器中查看");

@@ -24,7 +24,7 @@ public static class DriveMapper
     /// 将本地文件夹映射为驱动器盘符（用于 ProjFS 虚拟化根目录）
     /// 优先以非提权身份执行 subst，使资源管理器可见
     /// </summary>
-    public static char? MapLocalFolder(string folderPath)
+    public static async Task<char?> MapLocalFolderAsync(string folderPath)
     {
         var letter = FindAvailableDriveLetter();
         if (letter == null)
@@ -41,7 +41,7 @@ public static class DriveMapper
 
         // 方案1: 以非提权身份运行 subst（解决管理员/普通用户会话隔离问题）
         // ReSharper disable once UseRawString
-        var result = RunCommandAsNonElevated("subst", $@"{letter}: ""{fullPath}""");
+        var result = await RunCommandAsNonElevatedAsync("subst", $@"{letter}: ""{fullPath}""");
         if (result.ExitCode == 0)
         {
             _mappedByUs.Add(letter.Value);
@@ -55,7 +55,7 @@ public static class DriveMapper
 
         // 方案2: 直接 subst（仅提权会话可见）
         // ReSharper disable once UseRawString
-        result = RunCommand("subst", $@"{letter}: ""{fullPath}""");
+        result = await RunCommandAsync("subst", $@"{letter}: ""{fullPath}""");
         if (result.ExitCode == 0)
         {
             _mappedByUs.Add(letter.Value);
@@ -77,11 +77,11 @@ public static class DriveMapper
     /// <summary>
     /// 取消本地文件夹的驱动器映射
     /// </summary>
-    public static void UnmapLocalDrive(char driveLetter)
+    public static async Task UnmapLocalDriveAsync(char driveLetter)
     {
         // 两个会话都尝试移除
-        RunCommandAsNonElevated("subst", $"{driveLetter}: /d");
-        RunCommand("subst", $"{driveLetter}: /d");
+        await RunCommandAsNonElevatedAsync("subst", $"{driveLetter}: /d");
+        await RunCommandAsync("subst", $"{driveLetter}: /d");
         DefineDosDeviceW(DDD_REMOVE_DEFINITION, $"{driveLetter}:", null);
         _mappedByUs.Remove(driveLetter);
         Log.Information("[DriveMapper] 已取消映射 {DriveLetter}:", driveLetter);
@@ -104,7 +104,7 @@ public static class DriveMapper
         return null;
     }
 
-    private static (int ExitCode, string Output) RunCommand(string fileName, string arguments)
+    private static async Task<(int ExitCode, string Output)> RunCommandAsync(string fileName, string arguments)
     {
         try
         {
@@ -118,9 +118,11 @@ public static class DriveMapper
                 CreateNoWindow = true
             };
             using var process = Process.Start(psi)!;
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
-            process.WaitForExit(10000);
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            var output = await outputTask;
+            var error = await errorTask;
             return (process.ExitCode, string.IsNullOrEmpty(output) ? error : output);
         }
         catch (Exception ex)
@@ -133,7 +135,7 @@ public static class DriveMapper
     /// 以非提权（普通用户）身份运行命令，解决管理员会话隔离问题。
     /// 通过 Task Scheduler 以当前登录用户身份（LIMITED 权限）执行。
     /// </summary>
-    private static (int ExitCode, string Output) RunCommandAsNonElevated(string fileName, string arguments)
+    private static async Task<(int ExitCode, string Output)> RunCommandAsNonElevatedAsync(string fileName, string arguments)
     {
         try
         {
@@ -142,8 +144,8 @@ public static class DriveMapper
 
             // 创建一个计划任务，以当前用户身份（非提权）运行
             // /RL LIMITED = 以最低权限运行, /IT = 仅在用户登录时运行, /F = 强制创建
-            var createResult = RunCommand("schtasks",
-                $@"/Create /TN ""{taskName}"" /TR ""cmd /c {fileName} {arguments} > \""{tempOut}\"" 2>&1"" /SC ONCE /ST 00:00 /F /RL LIMITED /IT");
+            var createResult = await RunCommandAsync("schtasks",
+                                   $@"/Create /TN ""{taskName}"" /TR ""cmd /c {fileName} {arguments} > \""{tempOut}\"" 2>&1"" /SC ONCE /ST 00:00 /F /RL LIMITED /IT");
             if (createResult.ExitCode != 0)
             {
                 return (-1, $"创建任务失败: {createResult.Output}");
@@ -151,34 +153,34 @@ public static class DriveMapper
 
             // 立即运行
             // ReSharper disable once UseRawString
-            var runResult = RunCommand("schtasks", $@"/Run /TN ""{taskName}""");
+            var runResult = await RunCommandAsync("schtasks", $@"/Run /TN ""{taskName}""");
             if (runResult.ExitCode != 0)
             {
                 // ReSharper disable once UseRawString
-                RunCommand("schtasks", $@"/Delete /TN ""{taskName}"" /F");
+                await RunCommandAsync("schtasks", $@"/Delete /TN ""{taskName}"" /F");
                 return (-1, $"运行任务失败: {runResult.Output}");
             }
 
             // 等待完成
             for (var i = 0; i < 20; i++)
             {
-                Thread.Sleep(500);
+                await Task.Delay(500);
                 if (!File.Exists(tempOut))
                 {
                     continue;
                 }
                 // 再等一下确保写完
-                Thread.Sleep(300);
+                await Task.Delay(300);
                 break;
             }
 
             // 清理任务
             // ReSharper disable once UseRawString
-            RunCommand("schtasks", $@"/Delete /TN ""{taskName}"" /F");
+            await RunCommandAsync("schtasks", $@"/Delete /TN ""{taskName}"" /F");
             var output = "";
             if (File.Exists(tempOut))
             {
-                output = File.ReadAllText(tempOut);
+                output = await File.ReadAllTextAsync(tempOut);
                 try
                 {
                     File.Delete(tempOut);
