@@ -1,4 +1,5 @@
 using System.Management;
+using Serilog;
 
 namespace Ext4Mounter;
 
@@ -31,7 +32,7 @@ public sealed class UsbWatcher : IDisposable
         _insertWatcher = new(insertQuery);
         _insertWatcher.EventArrived += (_, _) =>
         {
-            Console.WriteLine("[UsbWatcher] 检测到 USB 磁盘插入");
+            Log.Information("[UsbWatcher] 检测到 USB 磁盘插入");
             // 延迟一下等系统识别完成
             Thread.Sleep(2000);
             DeviceInserted?.Invoke();
@@ -45,10 +46,10 @@ public sealed class UsbWatcher : IDisposable
         _removeWatcher = new(removeQuery);
         _removeWatcher.EventArrived += (_, _) =>
         {
-            Console.WriteLine("[UsbWatcher] 检测到 USB 磁盘拔出");
+            Log.Information("[UsbWatcher] 检测到 USB 磁盘拔出");
             DeviceRemoved?.Invoke();
         };
         _removeWatcher.Start();
-        Console.WriteLine("[UsbWatcher] USB 监听已启动");
+        Log.Information("[UsbWatcher] USB 监听已启动");
     }
 }

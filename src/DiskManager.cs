@@ -3,6 +3,7 @@ using DiscUtils;
 using DiscUtils.Ext;
 using DiscUtils.Partitions;
 using DiscUtils.Streams;
+using Serilog;
 
 namespace Ext4Mounter;
 
@@ -29,7 +30,7 @@ public static class DiskManager
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DiskManager] 扫描磁盘 {diskNumber} 失败: {ex.Message}");
+                Log.Error(ex, "[DiskManager] 扫描磁盘 {DiskNumber} 失败", diskNumber);
             }
         }
         return results;
@@ -55,10 +56,10 @@ public static class DiskManager
         }
         if (diskSize == 0)
         {
-            Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: 无法获取磁盘大小");
+            Log.Warning("[DiskManager] 磁盘 {DiskNumber}: 无法获取磁盘大小", diskNumber);
             return results;
         }
-        Console.WriteLine($"[DiskManager] 扫描磁盘 {diskNumber} ({FormatSize(diskSize)})...");
+        Log.Information("[DiskManager] 扫描磁盘 {DiskNumber} ({DiskSize})...", diskNumber, FormatSize(diskSize));
         using var diskStream = new PhysicalDiskStream(diskPath, diskSize);
 
         // 尝试读取分区表
@@ -72,17 +73,17 @@ public static class DiskManager
             partTable = new GuidPartitionTable(diskStream, geometry);
             if (partTable.Count == 0)
             {
-                Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: GPT 分区表为空");
+                Log.Information("[DiskManager] 磁盘 {DiskNumber}: GPT 分区表为空", diskNumber);
                 partTable = null;
             }
             else
             {
-                Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: 检测到 GPT 分区表, {partTable.Count} 个分区");
+                Log.Information("[DiskManager] 磁盘 {DiskNumber}: 检测到 GPT 分区表, {Count} 个分区", diskNumber, partTable.Count);
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: GPT 解析失败 ({ex.Message})");
+            Log.Debug("[DiskManager] 磁盘 {DiskNumber}: GPT 解析失败 ({Message})", diskNumber, ex.Message);
             partTable = null;
         }
 
@@ -95,17 +96,17 @@ public static class DiskManager
                 partTable = new BiosPartitionTable(diskStream);
                 if (partTable.Count == 0)
                 {
-                    Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: MBR 分区表为空");
+                    Log.Information("[DiskManager] 磁盘 {DiskNumber}: MBR 分区表为空", diskNumber);
                     partTable = null;
                 }
                 else
                 {
-                    Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: 检测到 MBR 分区表, {partTable.Count} 个分区");
+                    Log.Information("[DiskManager] 磁盘 {DiskNumber}: 检测到 MBR 分区表, {Count} 个分区", diskNumber, partTable.Count);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: MBR 解析失败 ({ex.Message})");
+                Log.Debug("[DiskManager] 磁盘 {DiskNumber}: MBR 解析失败 ({Message})", diskNumber, ex.Message);
                 partTable = null;
             }
         }
@@ -119,7 +120,7 @@ public static class DiskManager
         // 没有分区表或分区表中没找到 ext4 → 尝试整盘当 ext4 打开
         if (results.Count == 0)
         {
-            Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: 尝试整盘作为 ext4 打开...");
+            Log.Information("[DiskManager] 磁盘 {DiskNumber}: 尝试整盘作为 ext4 打开...", diskNumber);
             try
             {
                 diskStream.Position = 0;
@@ -129,11 +130,11 @@ public static class DiskManager
                     0,
                     diskSize,
                     $"磁盘 {diskNumber}, 整盘 ext4 ({FormatSize(diskSize)})"));
-                Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: 整盘 ext4 检测成功!");
+                Log.Information("[DiskManager] 磁盘 {DiskNumber}: 整盘 ext4 检测成功!", diskNumber);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DiskManager] 磁盘 {diskNumber}: 整盘 ext4 检测失败 ({ex.Message})");
+                Log.Debug("[DiskManager] 磁盘 {DiskNumber}: 整盘 ext4 检测失败 ({Message})", diskNumber, ex.Message);
             }
         }
         return results;
@@ -193,7 +194,7 @@ public static class DiskManager
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DiskManager] 打开 ext4 失败: {ex.Message}");
+            Log.Error(ex, "[DiskManager] 打开 ext4 失败");
             return null;
         }
     }
@@ -228,7 +229,7 @@ public static class DiskManager
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DiskManager] 获取 USB 磁盘列表失败: {ex.Message}");
+            Log.Error(ex, "[DiskManager] 获取 USB 磁盘列表失败");
         }
         return usbDisks;
     }
@@ -250,7 +251,7 @@ public static class DiskManager
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DiskManager] 获取磁盘列表失败: {ex.Message}");
+            Log.Error(ex, "[DiskManager] 获取磁盘列表失败");
         }
         return numbers;
     }

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Serilog;
 
 namespace Ext4Mounter;
 
@@ -28,13 +29,13 @@ public static class DriveMapper
         var letter = FindAvailableDriveLetter();
         if (letter == null)
         {
-            Console.WriteLine("[DriveMapper] 没有可用的盘符");
+            Log.Warning("[DriveMapper] 没有可用的盘符");
             return null;
         }
         var fullPath = Path.GetFullPath(folderPath);
         if (!Directory.Exists(fullPath))
         {
-            Console.WriteLine($"[DriveMapper] 文件夹不存在: {fullPath}");
+            Log.Warning("[DriveMapper] 文件夹不存在: {FullPath}", fullPath);
             return null;
         }
 
@@ -44,13 +45,13 @@ public static class DriveMapper
         if (result.ExitCode == 0)
         {
             _mappedByUs.Add(letter.Value);
-            Console.WriteLine($"[DriveMapper] 已映射 {fullPath} -> {letter}: (非提权 subst)");
+            Log.Information("[DriveMapper] 已映射 {FullPath} -> {Letter}: (非提权 subst)", fullPath, letter);
 
             // 同时在提权会话中也创建映射，让本进程也能访问
             DefineDosDeviceW(0, $"{letter}:", fullPath);
             return letter;
         }
-        Console.WriteLine($"[DriveMapper] 非提权 subst 失败: {result.Output.Trim()}");
+        Log.Debug("[DriveMapper] 非提权 subst 失败: {Output}", result.Output.Trim());
 
         // 方案2: 直接 subst（仅提权会话可见）
         // ReSharper disable once UseRawString
@@ -58,7 +59,7 @@ public static class DriveMapper
         if (result.ExitCode == 0)
         {
             _mappedByUs.Add(letter.Value);
-            Console.WriteLine($"[DriveMapper] 已映射 {fullPath} -> {letter}: (subst, 仅提权会话可见)");
+            Log.Information("[DriveMapper] 已映射 {FullPath} -> {Letter}: (subst, 仅提权会话可见)", fullPath, letter);
             return letter;
         }
 
@@ -66,10 +67,10 @@ public static class DriveMapper
         if (DefineDosDeviceW(0, $"{letter}:", fullPath))
         {
             _mappedByUs.Add(letter.Value);
-            Console.WriteLine($"[DriveMapper] 已映射 {fullPath} -> {letter}: (DefineDosDevice, 仅提权会话可见)");
+            Log.Information("[DriveMapper] 已映射 {FullPath} -> {Letter}: (DefineDosDevice, 仅提权会话可见)", fullPath, letter);
             return letter;
         }
-        Console.WriteLine("[DriveMapper] 所有映射方式均失败");
+        Log.Error("[DriveMapper] 所有映射方式均失败");
         return null;
     }
 
@@ -83,7 +84,7 @@ public static class DriveMapper
         RunCommand("subst", $"{driveLetter}: /d");
         DefineDosDeviceW(DDD_REMOVE_DEFINITION, $"{driveLetter}:", null);
         _mappedByUs.Remove(driveLetter);
-        Console.WriteLine($"[DriveMapper] 已取消映射 {driveLetter}:");
+        Log.Information("[DriveMapper] 已取消映射 {DriveLetter}:", driveLetter);
     }
 
     private static char? FindAvailableDriveLetter()

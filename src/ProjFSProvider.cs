@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using DiscUtils.Ext;
+using Serilog;
 
 // ReSharper disable UnusedMember.Global
 
@@ -286,22 +287,21 @@ public sealed class ProjFSProvider : IDisposable
     public static void PrintEnableInstructions()
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
-        Console.WriteLine("║  Windows Projected File System (ProjFS) 功能未启用！        ║");
-        Console.WriteLine("║                                                              ║");
-        Console.WriteLine("║  ProjFS 模式比 WebDAV 模式快得多，文件浏览和复制无需等待。  ║");
-        Console.WriteLine("║                                                              ║");
-        Console.WriteLine("║  请以管理员身份运行以下命令启用 ProjFS：                     ║");
-        Console.WriteLine("║                                                              ║");
-        Console.WriteLine("║  PowerShell:                                                  ║");
-        Console.WriteLine("║    Enable-WindowsOptionalFeature -Online `                    ║");
-        Console.WriteLine("║      -FeatureName Client-ProjFS -NoRestart                   ║");
-        Console.WriteLine("║                                                              ║");
-        Console.WriteLine("║  或通过 DISM:                                                 ║");
-        Console.WriteLine("║    dism /online /enable-feature /featurename:Client-ProjFS    ║");
-        Console.WriteLine("║                                                              ║");
-        Console.WriteLine("║  启用后需要重启电脑，然后重新运行本程序。                    ║");
-        Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
+        Console.WriteLine("""
+                          ╔═════════════════════════════════════════════════════════════════════════════════════
+                          ║  Windows Projected File System (ProjFS) 功能未启用!
+                          ║
+                          ║  请以管理员身份运行以下命令启用 ProjFS:
+                          ║
+                          ║  PowerShell:
+                          ║    Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -NoRestart
+                          ║
+                          ║  或通过 DISM:
+                          ║    dism /online /enable-feature /featurename:Client-ProjFS
+                          ║
+                          ║  启用后可能需要重启电脑,然后重新运行本程序.
+                          ╚═════════════════════════════════════════════════════════════════════════════════════
+                          """);
         Console.ResetColor();
     }
 
@@ -330,7 +330,7 @@ public sealed class ProjFSProvider : IDisposable
         }
         _namespaceContext = context;
         _started = true;
-        Console.WriteLine($"[ProjFS] 虚拟化已启动: {VirtualizationRoot}");
+        Log.Information("[ProjFS] 虚拟化已启动: {VirtualizationRoot}", VirtualizationRoot);
     }
 
     private void Stop()
@@ -350,7 +350,7 @@ public sealed class ProjFSProvider : IDisposable
         {
             _enumerations.Clear();
         }
-        Console.WriteLine("[ProjFS] 虚拟化已停止");
+        Log.Information("[ProjFS] 虚拟化已停止");
     }
 
     private int StartDirectoryEnumeration(PrjCallbackData callbackData, ref Guid enumerationId)
@@ -540,7 +540,7 @@ public sealed class ProjFSProvider : IDisposable
             ref placeholderInfo,
             infoSize);
         sw.Stop();
-        Console.WriteLine($"[ProjFS] {DateTime.Now:yyyy-MM-dd HH:mm:ss} PlaceholderInfo: {unixPath} ({(isDirectory ? "DIR" : FormatSize(size))}) {sw.ElapsedMilliseconds}ms");
+        Log.Debug("[ProjFS] PlaceholderInfo: {UnixPath} ({Type}) {ElapsedMs}ms", unixPath, isDirectory ? "DIR" : FormatSize(size), sw.ElapsedMilliseconds);
         return hr2;
     }
 
@@ -613,7 +613,7 @@ public sealed class ProjFSProvider : IDisposable
         }
         sw.Stop();
         var speed = sw.ElapsedMilliseconds > 0 ? (totalRead * 1000) / sw.ElapsedMilliseconds : 0;
-        Console.WriteLine($"[ProjFS] {DateTime.Now:yyyy-MM-dd HH:mm:ss} FileData: {unixPath} offset={byteOffset} req={FormatSize(length)} read={FormatSize(totalRead)} {sw.ElapsedMilliseconds}ms ({FormatSize(speed)}/s) lockWait={lockWaitMs}ms");
+        Log.Debug("[ProjFS] FileData: {UnixPath} offset={ByteOffset} req={ReqSize} read={ReadSize} {ElapsedMs}ms ({Speed}/s) lockWait={LockWaitMs}ms", unixPath, byteOffset, FormatSize(length), FormatSize(totalRead), sw.ElapsedMilliseconds, FormatSize(speed), lockWaitMs);
         return S_OK;
     }
 

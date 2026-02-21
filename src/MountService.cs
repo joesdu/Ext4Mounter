@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using DiscUtils.Ext;
+using Serilog;
 
 // ReSharper disable UseRawString
 
@@ -27,7 +28,7 @@ public sealed class MountService : IDisposable
         var usbDisks = DiskManager.GetUsbDiskNumbers();
         if (usbDisks.Count == 0)
         {
-            Console.WriteLine("[MountService] 未发现 USB 磁盘");
+            Log.Information("[MountService] 未发现 USB 磁盘");
             return;
         }
         foreach (var diskNumber in usbDisks)
@@ -42,7 +43,7 @@ public sealed class MountService : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[MountService] 扫描磁盘 {diskNumber} 失败: {ex.Message}");
+                Log.Error(ex, "[MountService] 扫描磁盘 {DiskNumber} 失败", diskNumber);
             }
         }
     }
@@ -60,17 +61,17 @@ public sealed class MountService : IDisposable
             {
                 try
                 {
-                    Console.WriteLine($"[MountService] 卸载 {mount.DriveLetter}:");
+                    Log.Information("[MountService] 卸载 {DriveLetter}:", mount.DriveLetter);
                     DriveMapper.UnmapLocalDrive(mount.DriveLetter);
                     mount.Provider.Dispose();
                     CleanupVirtualizationRoot(mount.Provider.VirtualizationRoot);
                     mount.FileSystem.Dispose();
                     _mounted.Remove(mount);
-                    Console.WriteLine($"[MountService] {mount.DriveLetter}: 已卸载");
+                    Log.Information("[MountService] {DriveLetter}: 已卸载", mount.DriveLetter);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[MountService] 卸载 {mount.DriveLetter}: 失败: {ex.Message}");
+                    Log.Error(ex, "[MountService] 卸载 {DriveLetter}: 失败", mount.DriveLetter);
                     _mounted.Remove(mount);
                 }
             }
@@ -88,7 +89,7 @@ public sealed class MountService : IDisposable
             {
                 try
                 {
-                    Console.WriteLine($"[MountService] 卸载 {mount.DriveLetter}:");
+                    Log.Information("[MountService] 卸载 {DriveLetter}:", mount.DriveLetter);
                     DriveMapper.UnmapLocalDrive(mount.DriveLetter);
                     mount.Provider.Dispose();
                     CleanupVirtualizationRoot(mount.Provider.VirtualizationRoot);
@@ -96,7 +97,7 @@ public sealed class MountService : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[MountService] 卸载失败: {ex.Message}");
+                    Log.Error(ex, "[MountService] 卸载失败");
                 }
             }
             _mounted.Clear();
@@ -116,7 +117,7 @@ public sealed class MountService : IDisposable
             var ext4 = DiskManager.OpenExt4(partInfo.DiskNumber, partInfo.PartitionOffset, partInfo.PartitionLength);
             if (ext4 == null)
             {
-                Console.WriteLine($"[MountService] 无法打开 ext4: {partInfo.Description}");
+                Log.Warning("[MountService] 无法打开 ext4: {Description}", partInfo.Description);
                 return;
             }
             try
@@ -133,7 +134,7 @@ public sealed class MountService : IDisposable
                     provider.Dispose();
                     CleanupVirtualizationRoot(virtRoot);
                     ext4.Dispose();
-                    Console.WriteLine($"[MountService] 映射盘符失败: {partInfo.Description}");
+                    Log.Warning("[MountService] 映射盘符失败: {Description}", partInfo.Description);
                     return;
                 }
                 _mounted.Add(new(partInfo.DiskNumber,
@@ -141,7 +142,7 @@ public sealed class MountService : IDisposable
                     driveLetter.Value,
                     provider,
                     ext4));
-                Console.WriteLine($"[MountService] {partInfo.Description} -> {driveLetter}:");
+                Log.Information("[MountService] {Description} -> {DriveLetter}:", partInfo.Description, driveLetter);
 
                 // 输出 ext4 分区的真实空间信息
                 try
@@ -149,10 +150,9 @@ public sealed class MountService : IDisposable
                     var totalSize = ext4.Size;
                     var usedSpace = ext4.UsedSpace;
                     var availSpace = ext4.AvailableSpace;
-                    Console.WriteLine($"[MountService]   分区大小: {FormatSize(totalSize)}, 已用: {FormatSize(usedSpace)}, 可用: {FormatSize(availSpace)}");
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine("[MountService]   注意: 资源管理器中显示的磁盘大小为本地缓存盘大小，非 ext4 分区真实大小");
-                    Console.ResetColor();
+                    Log.Information("[MountService]   分区大小: {TotalSize}, 已用: {UsedSpace}, 可用: {AvailSpace}",
+                        FormatSize(totalSize), FormatSize(usedSpace), FormatSize(availSpace));
+                    Log.Warning("[MountService]   注意: 资源管理器中显示的磁盘大小为本地缓存盘大小，非 ext4 分区真实大小");
                 }
                 catch
                 {
@@ -161,7 +161,7 @@ public sealed class MountService : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[MountService] 挂载失败: {ex.Message}");
+                Log.Error(ex, "[MountService] 挂载失败");
                 ext4.Dispose();
             }
         }
