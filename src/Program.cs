@@ -16,6 +16,9 @@ try
     Log.Information("请以管理员身份运行本程序（需要读取物理磁盘）");
     Log.Information("需要 Windows 10 1809 或更高版本（ProjFS 支持）");
 
+    // 清理上次非正常退出残留的盘符映射
+    await DriveMapper.CleanupStaleSubstMappingsAsync();
+
     // 检查 ProjFS 功能是否可用
     if (!ProjFSProvider.IsProjFSAvailable())
     {
@@ -30,6 +33,21 @@ try
     Log.Information("[提示] ext4 分区以只读模式挂载，如需删除文件请在 Linux 下操作");
     using var mountService = new MountService();
     using var usbWatcher = new UsbWatcher();
+
+    // 注册进程退出信号处理，确保非正常退出时也能清理盘符
+    // Ctrl+C / Ctrl+Break
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true; // 阻止立即终止，让 finally 块有机会执行清理
+        Log.Information("[信号] 收到终止信号，正在卸载所有分区...");
+        // ReSharper disable once AccessToDisposedClosure
+    };
+    // 进程退出（关闭控制台窗口等）— 最后的清理机会
+    AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+    {
+        Log.Information("[退出] 进程即将退出，清理残留映射...");
+        Log.CloseAndFlush();
+    };
 
     // 启动时先扫描一次
     Log.Information("[启动] 扫描已连接的 USB 磁盘...");

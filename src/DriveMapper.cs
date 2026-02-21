@@ -87,6 +87,42 @@ public static class DriveMapper
         Log.Information("[DriveMapper] 已取消映射 {DriveLetter}:", driveLetter);
     }
 
+    /// <summary>
+    /// 清理上次程序非正常退出残留的 subst 映射（指向 ext4mount_* 临时目录的盘符）
+    /// </summary>
+    public static async Task CleanupStaleSubstMappingsAsync()
+    {
+        try
+        {
+            // subst 无参数输出所有映射，格式: "Z:\: => C:\Users\xxx\AppData\Local\Temp\ext4mount_1_0"
+            var result = await RunCommandAsync("subst", "");
+            if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+            {
+                return;
+            }
+            foreach (var line in result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = line.Trim();
+                // 格式: "Z:\: => C:\path\ext4mount_xxx"
+                if (!trimmed.Contains("ext4mount_", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (trimmed is not [_, '\\', ..] || !char.IsLetter(trimmed[0]))
+                {
+                    continue;
+                }
+                var letter = trimmed[0];
+                Log.Information("[DriveMapper] 清理残留映射 {Letter}:", letter);
+                await UnmapLocalDriveAsync(letter);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[DriveMapper] 清理残留映射时出错");
+        }
+    }
+
     private static char? FindAvailableDriveLetter()
     {
         var usedLetters = DriveInfo.GetDrives()
