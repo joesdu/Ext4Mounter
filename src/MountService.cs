@@ -14,10 +14,22 @@ public sealed class MountService : IDisposable
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     private readonly List<MountedPartition> _mounted = [];
+    private int _disposed;
 
     public void Dispose()
     {
-        UnmountAllAsync().GetAwaiter().GetResult();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+        try
+        {
+            UnmountAllAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "[MountService] Dispose 清理失败");
+        }
         _lock.Dispose();
     }
 

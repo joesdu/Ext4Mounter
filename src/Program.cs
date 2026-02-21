@@ -1,6 +1,9 @@
 using Ext4Mounter;
 using Serilog;
 
+// ReSharper disable DisposeOnUsingVariable
+// ReSharper disable AccessToDisposedClosure
+
 // 初始化 Serilog：同时输出到控制台和日志文件
 Log.Logger = new LoggerConfiguration()
              .MinimumLevel.Debug()
@@ -33,19 +36,20 @@ try
     Log.Information("[提示] ext4 分区以只读模式挂载，如需删除文件请在 Linux 下操作");
     using var mountService = new MountService();
     using var usbWatcher = new UsbWatcher();
+    using var cts = new CancellationTokenSource();
 
-    // 注册进程退出信号处理，确保非正常退出时也能清理盘符
-    // Ctrl+C / Ctrl+Break
+    // 注册进程退出信号处理，通知主循环退出
     Console.CancelKeyPress += (_, e) =>
     {
-        e.Cancel = true; // 阻止立即终止，让 finally 块有机会执行清理
-        Log.Information("[信号] 收到终止信号，正在卸载所有分区...");
-        // ReSharper disable once AccessToDisposedClosure
+        Log.Information("[信号] 收到终止信号，准备退出...");
+        e.Cancel = true; // 阻止立即终止，让主循环走正常退出流程
+        cts.Cancel();
     };
-    // 进程退出（关闭控制台窗口等）— 最后的清理机会
     AppDomain.CurrentDomain.ProcessExit += (_, _) =>
     {
-        Log.Information("[退出] 进程即将退出，清理残留映射...");
+        // 进程退出的最后清理机会（关闭控制台窗口等场景）
+        // mountService.Dispose() 有防重入保护，重复调用安全
+        mountService.Dispose();
         Log.CloseAndFlush();
     };
 
@@ -81,8 +85,21 @@ try
     usbWatcher.Start();
     Log.Information("[运行中] 快捷键: Q=退出 S=重新扫描 L=列出已挂载分区");
     Log.Information("挂载后可直接在资源管理器中浏览和复制文件");
-    while (true)
+    // 主循环：轮询按键，同时响应取消信号（Ctrl+C / 关闭窗口）
+    while (!cts.IsCancellationRequested)
     {
+        if (!Console.KeyAvailable)
+        {
+            try
+            {
+                await Task.Delay(100, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            continue;
+        }
         var key = Console.ReadKey(true);
         switch (char.ToUpper(key.KeyChar))
         {
@@ -111,6 +128,9 @@ try
                 break;
         }
     }
+    // Ctrl+C 退出路径
+    Log.Information("[退出] 正在卸载所有分区...");
+    await mountService.UnmountAllAsync();
 }
 catch (Exception ex)
 {
