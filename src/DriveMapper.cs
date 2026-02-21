@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 using Serilog;
 
 namespace Ext4Mounter;
@@ -13,12 +14,19 @@ namespace Ext4Mounter;
 public static class DriveMapper
 {
     private const int DDD_REMOVE_DEFINITION = 2;
+
+    private const int SHCNE_DRIVEADD = 0x00000100;
+    private const int SHCNE_DRIVEREMOVED = 0x00008000;
+    private const int SHCNF_PATHW = 0x0005;
     private static readonly char[] CandidateLetters = "ZYXWVUTSRQPONMLKJIHGFED".ToCharArray();
     private static readonly HashSet<char> _mappedByUs = [];
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DefineDosDeviceW(int dwFlags, string lpDeviceName, string? lpTargetPath);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern void SHChangeNotify(int wEventId, int uFlags, string? dwItem1, nint dwItem2);
 
     /// <summary>
     /// 将本地文件夹映射为驱动器盘符（用于 ProjFS 虚拟化根目录）
@@ -49,6 +57,7 @@ public static class DriveMapper
 
             // 同时在提权会话中也创建映射，让本进程也能访问
             DefineDosDeviceW(0, $"{letter}:", fullPath);
+            NotifyDriveAdded(letter.Value);
             return letter;
         }
         Log.Debug("[DriveMapper] 非提权 subst 失败: {Output}", result.Output.Trim());
@@ -60,6 +69,7 @@ public static class DriveMapper
         {
             _mappedByUs.Add(letter.Value);
             Log.Information("[DriveMapper] 已映射 {FullPath} -> {Letter}: (subst, 仅提权会话可见)", fullPath, letter);
+            NotifyDriveAdded(letter.Value);
             return letter;
         }
 
@@ -68,6 +78,7 @@ public static class DriveMapper
         {
             _mappedByUs.Add(letter.Value);
             Log.Information("[DriveMapper] 已映射 {FullPath} -> {Letter}: (DefineDosDevice, 仅提权会话可见)", fullPath, letter);
+            NotifyDriveAdded(letter.Value);
             return letter;
         }
         Log.Error("[DriveMapper] 所有映射方式均失败");
@@ -84,6 +95,10 @@ public static class DriveMapper
         await RunCommandAsync("subst", $"{driveLetter}: /d");
         DefineDosDeviceW(DDD_REMOVE_DEFINITION, $"{driveLetter}:", null);
         _mappedByUs.Remove(driveLetter);
+        // 清理 MountPoints2 注册表残留
+        CleanupMountPointsRegistry(driveLetter);
+        // 通知资源管理器刷新
+        NotifyDriveRemoved(driveLetter);
         Log.Information("[DriveMapper] 已取消映射 {DriveLetter}:", driveLetter);
     }
 
@@ -92,29 +107,45 @@ public static class DriveMapper
     /// </summary>
     public static async Task CleanupStaleSubstMappingsAsync()
     {
+        var cleaned = new HashSet<char>();
         try
         {
-            // subst 无参数输出所有映射，格式: "Z:\: => C:\Users\xxx\AppData\Local\Temp\ext4mount_1_0"
+            // 1. 通过 subst 输出查找残留映射
             var result = await RunCommandAsync("subst", "");
-            if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+            if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output))
             {
-                return;
+                foreach (var line in result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var trimmed = line.Trim();
+                    if (!trimmed.Contains("ext4mount_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    if (trimmed is not [_, '\\', ..] || !char.IsLetter(trimmed[0]))
+                    {
+                        continue;
+                    }
+                    var letter = trimmed[0];
+                    Log.Information("[DriveMapper] 清理残留映射 {Letter}:", letter);
+                    await UnmapLocalDriveAsync(letter);
+                    cleaned.Add(letter);
+                }
             }
-            foreach (var line in result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            // 2. 通过 DriveInfo 查找不可访问的残留盘符（subst 可能看不到 DefineDosDevice 创建的映射）
+            foreach (var drive in DriveInfo.GetDrives())
             {
-                var trimmed = line.Trim();
-                // 格式: "Z:\: => C:\path\ext4mount_xxx"
-                if (!trimmed.Contains("ext4mount_", StringComparison.OrdinalIgnoreCase))
-                {
+                var letter = drive.Name[0];
+                if (cleaned.Contains(letter))
                     continue;
-                }
-                if (trimmed is not [_, '\\', ..] || !char.IsLetter(trimmed[0]))
-                {
+                if (drive.DriveType != DriveType.NoRootDirectory)
                     continue;
-                }
-                var letter = trimmed[0];
-                Log.Information("[DriveMapper] 清理残留映射 {Letter}:", letter);
-                await UnmapLocalDriveAsync(letter);
+                if (drive.IsReady)
+                    continue;
+                Log.Information("[DriveMapper] 发现不可访问盘符 {Letter}:，尝试 DefineDosDevice 清理", letter);
+                DefineDosDeviceW(DDD_REMOVE_DEFINITION, $"{letter}:", null);
+                CleanupMountPointsRegistry(letter);
+                NotifyDriveRemoved(letter);
+                cleaned.Add(letter);
             }
         }
         catch (Exception ex)
@@ -138,6 +169,52 @@ public static class DriveMapper
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// 清理 MountPoints2 注册表中的残留条目
+    /// </summary>
+    private static void CleanupMountPointsRegistry(char driveLetter)
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2", true);
+            key?.DeleteSubKeyTree(driveLetter.ToString(), false);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "[DriveMapper] 清理 MountPoints2 注册表失败: {Letter}", driveLetter);
+        }
+    }
+
+    /// <summary>
+    /// 通知资源管理器盘符已添加
+    /// </summary>
+    private static void NotifyDriveAdded(char driveLetter)
+    {
+        try
+        {
+            SHChangeNotify(SHCNE_DRIVEADD, SHCNF_PATHW, $@"{driveLetter}:\", nint.Zero);
+        }
+        catch
+        {
+            /* ignore */
+        }
+    }
+
+    /// <summary>
+    /// 通知资源管理器盘符已移除
+    /// </summary>
+    private static void NotifyDriveRemoved(char driveLetter)
+    {
+        try
+        {
+            SHChangeNotify(SHCNE_DRIVEREMOVED, SHCNF_PATHW, $@"{driveLetter}:\", nint.Zero);
+        }
+        catch
+        {
+            /* ignore */
+        }
     }
 
     private static async Task<(int ExitCode, string Output)> RunCommandAsync(string fileName, string arguments)
