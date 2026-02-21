@@ -540,7 +540,7 @@ public sealed class ProjFSProvider : IDisposable
             ref placeholderInfo,
             infoSize);
         sw.Stop();
-        Console.WriteLine($"[ProjFS] PlaceholderInfo: {unixPath} ({(isDirectory ? "DIR" : FormatSize(size))}) {sw.ElapsedMilliseconds}ms");
+        Console.WriteLine($"[ProjFS] {DateTime.Now:yyyy-MM-dd HH:mm:ss} PlaceholderInfo: {unixPath} ({(isDirectory ? "DIR" : FormatSize(size))}) {sw.ElapsedMilliseconds}ms");
         return hr2;
     }
 
@@ -613,7 +613,7 @@ public sealed class ProjFSProvider : IDisposable
         }
         sw.Stop();
         var speed = sw.ElapsedMilliseconds > 0 ? (totalRead * 1000) / sw.ElapsedMilliseconds : 0;
-        Console.WriteLine($"[ProjFS] FileData: {unixPath} offset={byteOffset} req={FormatSize(length)} read={FormatSize(totalRead)} {sw.ElapsedMilliseconds}ms ({FormatSize(speed)}/s) lockWait={lockWaitMs}ms");
+        Console.WriteLine($"[ProjFS] {DateTime.Now:yyyy-MM-dd HH:mm:ss} FileData: {unixPath} offset={byteOffset} req={FormatSize(length)} read={FormatSize(totalRead)} {sw.ElapsedMilliseconds}ms ({FormatSize(speed)}/s) lockWait={lockWaitMs}ms");
         return S_OK;
     }
 
